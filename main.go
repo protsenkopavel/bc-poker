@@ -1,11 +1,14 @@
 package main
 
 import (
-	"bcpocker/deck"
-	"fmt"
+	"bcpocker/p2p"
 )
 
 func main() {
-	d := deck.Shuffle(deck.New())
-	fmt.Println(d)
+	cfg := p2p.ServerConfig{
+		ListenAddr: ":3000",
+	}
+	server := p2p.NewServer(cfg)
+
+	server.Start()
 }

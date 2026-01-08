@@ -1,8 +1,8 @@
 build:
-	@go build -o bin/bcpocker
+	@go build -o bin/bcpoker
 
 run: build
-	@./bin/bcpocker
+	@./bin/bcpoker
 
 test:
 	go test -v ./...
