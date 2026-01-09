@@ -1,7 +1,9 @@
 package p2p
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 )
@@ -16,23 +18,35 @@ func (p *Peer) Send(b []byte) error {
 }
 
 type ServerConfig struct {
+	Version    string
 	ListenAddr string
+}
+
+type Message struct {
+	Payload io.Reader
+	From    net.Addr
 }
 
 type Server struct {
 	ServerConfig
 
+	handler  Handler
 	listener net.Listener
 	mu       sync.RWMutex
 	peers    map[net.Addr]*Peer
 	addPeer  chan *Peer
+	delPeer  chan *Peer
+	msgCh    chan *Message
 }
 
 func NewServer(cfg ServerConfig) *Server {
 	return &Server{
+		handler:      &DefaultHandler{},
 		ServerConfig: cfg,
 		peers:        make(map[net.Addr]*Peer),
 		addPeer:      make(chan *Peer),
+		delPeer:      make(chan *Peer),
+		msgCh:        make(chan *Message),
 	}
 }
 
@@ -48,6 +62,19 @@ func (s *Server) Start() {
 	s.acceptLoop()
 }
 
+func (s *Server) Connect(addr string) error {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return err
+	}
+
+	peer := &Peer{conn: conn}
+
+	s.addPeer <- peer
+
+	return peer.Send([]byte(s.Version))
+}
+
 func (s *Server) acceptLoop() {
 	for {
 		conn, err := s.listener.Accept()
@@ -59,23 +86,30 @@ func (s *Server) acceptLoop() {
 
 		s.addPeer <- peer
 
-		peer.Send([]byte("BCPOKER V0.1-alpha"))
+		peer.Send([]byte(s.Version))
 
-		go s.handleConn(conn)
+		go s.handleConn(peer)
 	}
 }
 
-func (s *Server) handleConn(conn net.Conn) {
+func (s *Server) handleConn(p *Peer) {
 	buf := make([]byte, 1024)
 
 	for {
-		n, err := conn.Read(buf)
+		n, err := p.conn.Read(buf)
 		if err != nil {
 			break
 		}
 
+		s.msgCh <- &Message{
+			From:    p.conn.RemoteAddr(),
+			Payload: bytes.NewReader(buf[:n]),
+		}
+
 		fmt.Println(string(buf[:n]))
 	}
+
+	s.delPeer <- p
 }
 
 func (s *Server) listen() error {
@@ -93,8 +127,15 @@ func (s *Server) loop() {
 	for {
 		select {
 		case peer := <-s.addPeer:
-			fmt.Printf("new player connected %s\n", peer.conn.RemoteAddr().String())
+			delete(s.peers, peer.conn.RemoteAddr())
+			fmt.Printf("player disconnected %s\n", peer.conn.RemoteAddr().String())
+		case peer := <-s.addPeer:
 			s.peers[peer.conn.RemoteAddr()] = peer
+			fmt.Printf("new player connected %s\n", peer.conn.RemoteAddr().String())
+		case msg := <-s.msgCh:
+			if err := s.handler.HandleMessage(msg); err != nil {
+				panic(err)
+			}
 		}
 	}
 }
